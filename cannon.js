@@ -27,18 +27,22 @@ class CannonGame {
             barrelLength: 50
         };
         
-        // Projectiles
+        // Projectiles & Enemies
         this.bullets = [];
         this.rockets = [];
         this.particles = [];
+        this.enemies = []; // Falling objects
         
         // Stats
         this.bulletsFired = 0;
         this.rocketsFired = 0;
+        this.score = 0;
         
-        // Firing cooldowns
+        // Timing
         this.bulletCooldown = 0;
         this.rocketCooldown = 0;
+        this.enemySpawnRate = 60; // Frames between spawns
+        this.enemySpawnTimer = 0;
         
         this.init();
     }
@@ -103,27 +107,32 @@ class CannonGame {
         gainNode.connect(this.audioCtx.destination);
         
         if (type === 'bullet') {
-            // "Pew" sound - high pitch sweeping down
+            // "Pew" sound
             osc.type = 'square';
             osc.frequency.setValueAtTime(800, this.audioCtx.currentTime);
             osc.frequency.exponentialRampToValueAtTime(100, this.audioCtx.currentTime + 0.1);
-            
-            gainNode.gain.setValueAtTime(0.1, this.audioCtx.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioCtx.currentTime + 0.1);
-            
+            gainNode.gain.setValueAtTime(0.05, this.audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.1);
             osc.start();
             osc.stop(this.audioCtx.currentTime + 0.1);
         } else if (type === 'rocket') {
-            // "Whoosh" sound - lower pitch sweep
+            // "Whoosh" sound
             osc.type = 'sawtooth';
             osc.frequency.setValueAtTime(200, this.audioCtx.currentTime);
             osc.frequency.linearRampToValueAtTime(50, this.audioCtx.currentTime + 0.3);
-            
-            gainNode.gain.setValueAtTime(0.1, this.audioCtx.currentTime);
-            gainNode.gain.linearRampToValueAtTime(0.01, this.audioCtx.currentTime + 0.3);
-            
+            gainNode.gain.setValueAtTime(0.05, this.audioCtx.currentTime);
+            gainNode.gain.linearRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.3);
             osc.start();
             osc.stop(this.audioCtx.currentTime + 0.3);
+        } else if (type === 'explosion') {
+            // Noise-like explosion
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(100, this.audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(10, this.audioCtx.currentTime + 0.2);
+            gainNode.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.2);
+            osc.start();
+            osc.stop(this.audioCtx.currentTime + 0.2);
         }
     }
     
@@ -236,11 +245,63 @@ class CannonGame {
             });
         }
     }
+
+    /**
+     * Spawn an enemy falling object
+     */
+    spawnEnemy() {
+        // Random horizontal position, distinct shapes
+        const x = Math.random() * this.canvas.width;
+        const size = Math.random() * 30 + 20; // Size between 20 and 50
+        const speed = Math.random() * 2 + 1;
+        
+        this.enemies.push({
+            x: x,
+            y: -50, // Start above screen
+            vy: speed,
+            radius: size, // Use radius for simple collision
+            rotation: 0,
+            rotationSpeed: (Math.random() - 0.5) * 0.1,
+            color: `hsl(${Math.random() * 60 + 0}, 80%, 60%)` // Red/Orange hues
+        });
+    }
+
+    /**
+     * Create explosion particles
+     */
+    createExplosion(x, y, color) {
+        const particleCount = 15;
+        this.playSound('explosion');
+        
+        for (let i = 0; i < particleCount; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const speed = Math.random() * 6 + 2;
+            this.particles.push({
+                x: x,
+                y: y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                radius: Math.random() * 4 + 2,
+                life: 1.0,
+                decay: 0.03 + Math.random() * 0.03,
+                color: { r: 255, g: 200, b: 50 } // Gold/Fire colors
+            });
+        }
+    }
     
     /**
      * Update all game objects
      */
     update() {
+        // Spawn enemies
+        this.enemySpawnTimer++;
+        if (this.enemySpawnTimer > this.enemySpawnRate) {
+            this.spawnEnemy();
+            this.enemySpawnTimer = 0;
+            // Gradually increase difficulty
+            if (this.enemySpawnRate > 20) this.enemySpawnRate -= 0.5;
+        }
+
         // Update cooldowns
         if (this.bulletCooldown > 0) this.bulletCooldown--;
         if (this.rocketCooldown > 0) this.rocketCooldown--;
@@ -250,7 +311,14 @@ class CannonGame {
         const dy = this.mouse.y - this.cannon.y;
         this.cannon.angle = Math.atan2(dy, dx);
         
-        // Update bullets
+        // Update enemies
+        this.enemies = this.enemies.filter(enemy => {
+            enemy.y += enemy.vy;
+            enemy.rotation += enemy.rotationSpeed;
+            return enemy.y < this.canvas.height + 100; // Remove if falls off screen
+        });
+
+        // Update bullets & check collisions
         this.bullets = this.bullets.filter(bullet => {
             // Store trail
             bullet.trail.push({ x: bullet.x, y: bullet.y });
@@ -263,6 +331,26 @@ class CannonGame {
             // Fade out
             bullet.life -= 0.005;
             
+            // Check collision with enemies (simple circle collision)
+            let crashed = false;
+            for (let i = this.enemies.length - 1; i >= 0; i--) {
+                const enemy = this.enemies[i];
+                const dx = bullet.x - enemy.x;
+                const dy = bullet.y - enemy.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if (dist < enemy.radius + bullet.radius) {
+                    // Hit!
+                    this.createExplosion(enemy.x, enemy.y);
+                    this.enemies.splice(i, 1); // Remove enemy
+                    crashed = true;
+                    this.score += 10;
+                    this.updateStats();
+                    break; 
+                }
+            }
+            if (crashed) return false;
+
             // Remove if off-screen or faded
             return bullet.life > 0 && 
                    bullet.x > -50 && bullet.x < this.canvas.width + 50 &&
@@ -276,8 +364,11 @@ class CannonGame {
             if (rocket.trail.length > 15) rocket.trail.shift();
             
             // Homing behavior - track mouse
-            const dx = this.mouse.x - rocket.x;
-            const dy = this.mouse.y - rocket.y;
+            let targetParams = { x: this.mouse.x, y: this.mouse.y };
+            // Optional: home in on nearest enemy? For now, keep mouse tracking as requested
+
+            const dx = targetParams.x - rocket.x;
+            const dy = targetParams.y - rocket.y;
             const targetAngle = Math.atan2(dy, dx);
             
             // Smoothly rotate towards target
@@ -316,6 +407,26 @@ class CannonGame {
             // Fade out
             rocket.life -= 0.003;
             
+             // Check collision with enemies
+             let crashed = false;
+             for (let i = this.enemies.length - 1; i >= 0; i--) {
+                 const enemy = this.enemies[i];
+                 const dx = rocket.x - enemy.x;
+                 const dy = rocket.y - enemy.y;
+                 const dist = Math.sqrt(dx*dx + dy*dy);
+                 
+                 if (dist < enemy.radius + rocket.radius) {
+                     // Hit!
+                     this.createExplosion(enemy.x, enemy.y);
+                     this.enemies.splice(i, 1); // Remove enemy
+                     crashed = true;
+                     this.score += 25; // More points for rocket usage
+                     this.updateStats();
+                     break; 
+                 }
+             }
+             if (crashed) return false;
+
             // Remove if off-screen or faded
             return rocket.life > 0 && 
                    rocket.x > -100 && rocket.x < this.canvas.width + 100 &&
@@ -341,6 +452,33 @@ class CannonGame {
         // Clear canvas
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         
+        // Draw enemies (falling rocks)
+        this.enemies.forEach(enemy => {
+            this.ctx.save();
+            this.ctx.translate(enemy.x, enemy.y);
+            this.ctx.rotate(enemy.rotation);
+            this.ctx.fillStyle = enemy.color;
+            this.ctx.strokeStyle = '#ffffff';
+            this.ctx.lineWidth = 2;
+            this.ctx.shadowBlur = 10;
+            this.ctx.shadowColor = enemy.color;
+            
+            // Draw a rough asteroid shape
+            this.ctx.beginPath();
+            const segments = 6;
+            for(let i=0; i<segments; i++) {
+                const theta = (i / segments) * Math.PI * 2;
+                const r = enemy.radius * (0.8 + Math.random() * 0.4); // This purely random wobble might flicker, better to pre-generate shape, but for simplicity:
+                // Actually, let's just draw a square/circle for stability in this loop
+                // Or better, just a box for now.
+            }
+            // Simple Polygon
+            this.ctx.fillRect(-enemy.radius/2, -enemy.radius/2, enemy.radius, enemy.radius);
+            this.ctx.strokeRect(-enemy.radius/2, -enemy.radius/2, enemy.radius, enemy.radius);
+            
+            this.ctx.restore();
+        });
+
         // Draw particles
         this.particles.forEach(particle => {
             this.ctx.save();
@@ -487,6 +625,7 @@ class CannonGame {
      * Update stats display
      */
     updateStats() {
+        document.getElementById('scoreDisplay').textContent = `Score: ${this.score}`;
         document.getElementById('bulletCount').textContent = `Bullets: ${this.bulletsFired}`;
         document.getElementById('rocketCount').textContent = `Rockets: ${this.rocketsFired}`;
     }

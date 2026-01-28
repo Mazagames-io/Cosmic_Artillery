@@ -75,6 +75,19 @@ body {
   pointer-events: none;
   text-align: center;
   padding: 2rem;
+  /* Animate to side after 2 seconds */
+  animation: driftAside 3s ease-in-out 2s forwards;
+}
+
+@keyframes driftAside {
+    0% {
+        align-items: center;
+        padding-left: 2rem;
+    }
+    100% {
+        align-items: flex-start;
+        padding-left: 5vw;
+    }
 }
 
 /* ===================================
